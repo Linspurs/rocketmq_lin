@@ -24,6 +24,11 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * k1 回查事务状态
+ *   执行完本地事务返回broker状态为Un_Know时，EndTransaction()不做任何处理
+ *   而是通过事务回查线程默认以定时1分钟的频率回查，以得到发送端明确的事务状态
+ */
 public class TransactionalMessageCheckService extends ServiceThread {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.TRANSACTION_LOGGER_NAME);
 
@@ -67,6 +72,9 @@ public class TransactionalMessageCheckService extends ServiceThread {
         log.info("End transaction check service thread!");
     }
 
+    /**
+     * k2 只有满足 事务消息到回查时间（60s） && 小于最大回查次数（15次） 才回查
+     */
     @Override
     protected void onWaitEnd() {
         long timeout = brokerController.getBrokerConfig().getTransactionTimeOut();

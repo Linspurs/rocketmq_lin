@@ -28,6 +28,11 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.protocol.body.KVTable;
 import org.apache.rocketmq.namesrv.NamesrvController;
+
+/**
+ * k3 读取或变更NameServer的配置属性，加载 NamesrvConfig中配置的配置文件到内存，
+ *    此类一个亮点就是使用轻量级的非线程安全容器，再结合读写锁对资源读写进行保护。尽最大程度提高线程的并发度。
+ */
 public class KVConfigManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
 
@@ -169,6 +174,7 @@ public class KVConfigManager {
         return null;
     }
 
+    // k3 打印kv配置configTable
     public void printAllPeriodically() {
         try {
             this.lock.readLock().lockInterruptibly();

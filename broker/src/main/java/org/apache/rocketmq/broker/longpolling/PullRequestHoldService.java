@@ -29,11 +29,20 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.store.ConsumeQueueExt;
 
+/**
+ * k1 当consumer向broker发起的拉取请求的消息还未到达ConsumerQueue，
+ *  如果开启LongPollingEnable，broker一方面会每5s轮询检查一次消息是否可达，
+ *  同时一有新消息到达后立马通知被挂起的线程再次验证是否是自己感兴趣的消息，
+ *  是：则从commitLog文件提取消息返回客户端，否：直到挂起超时（默认15s）
+ *  不开启LongPollingEnable，则会在服务端等待shortPollingTimeMills时间后（挂起）再去判断消息是否已到达ConsumerQueue，
+ *  如果还未到达，则返回Consumer PULL_NOT_FOUND
+ */
 public class PullRequestHoldService extends ServiceThread {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final String TOPIC_QUEUEID_SEPARATOR = "@";
     private final BrokerController brokerController;
     private final SystemClock systemClock = new SystemClock();
+    // k3 同一topic@queueId下累积的PullRequest
     private ConcurrentMap<String/* topic@queueId */, ManyPullRequest> pullRequestTable =
         new ConcurrentHashMap<String, ManyPullRequest>(1024);
 
@@ -68,6 +77,7 @@ public class PullRequestHoldService extends ServiceThread {
         log.info("{} service started", this.getServiceName());
         while (!this.isStopped()) {
             try {
+                // k3 开启长轮询，每5s尝试，未开启，每1s尝试
                 if (this.brokerController.getBrokerConfig().isLongPollingEnable()) {
                     this.waitForRunning(5 * 1000);
                 } else {
@@ -93,6 +103,10 @@ public class PullRequestHoldService extends ServiceThread {
         return PullRequestHoldService.class.getSimpleName();
     }
 
+    /**
+     * k2 遍历pullRequestTable，根据topic、queueId获取ConsumerQueue最大偏移量，
+     *  如果该偏移量大于待拉取偏移量，说明有新消息到达
+     */
     private void checkHoldRequest() {
         for (String key : this.pullRequestTable.keySet()) {
             String[] kArray = key.split(TOPIC_QUEUEID_SEPARATOR);
@@ -118,26 +132,28 @@ public class PullRequestHoldService extends ServiceThread {
         String key = this.buildKey(topic, queueId);
         ManyPullRequest mpr = this.pullRequestTable.get(key);
         if (mpr != null) {
+            // k3 synchronized 取出该topic-queue下的所有所有被挂起的PullRequest
             List<PullRequest> requestList = mpr.cloneListAndClear();
             if (requestList != null) {
                 List<PullRequest> replayList = new ArrayList<PullRequest>();
-
+                // k3 遍历PullRequest
                 for (PullRequest request : requestList) {
                     long newestOffset = maxOffset;
                     if (newestOffset <= request.getPullFromThisOffset()) {
                         newestOffset = this.brokerController.getMessageStore().getMaxOffsetInQueue(topic, queueId);
                     }
-
                     if (newestOffset > request.getPullFromThisOffset()) {
                         boolean match = request.getMessageFilter().isMatchedByConsumeQueue(tagsCode,
                             new ConsumeQueueExt.CqExtUnit(tagsCode, msgStoreTime, filterBitMap));
-                        // match by bit map, need eval again when properties is not null.
+                        // k3 match by bit map, need eval again when properties is not null.
                         if (match && properties != null) {
                             match = request.getMessageFilter().isMatchedByCommitLog(null, properties);
                         }
-
+                        // k3 consumeQueue的最大偏移量 大于 待拉取偏移量 && 消息匹配
                         if (match) {
                             try {
+                                // k3 PullMessageProcessor.this.processRequest(channel, request, false);
+                                //  此时就不要在 未找到消息时还挂起了
                                 this.brokerController.getPullMessageProcessor().executeRequestWhenWakeup(request.getClientChannel(),
                                     request.getRequestCommand());
                             } catch (Throwable e) {
@@ -147,6 +163,7 @@ public class PullRequestHoldService extends ServiceThread {
                         }
                     }
 
+                    // k3 挂起超时
                     if (System.currentTimeMillis() >= (request.getSuspendTimestamp() + request.getTimeoutMillis())) {
                         try {
                             this.brokerController.getPullMessageProcessor().executeRequestWhenWakeup(request.getClientChannel(),

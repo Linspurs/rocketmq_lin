@@ -187,9 +187,15 @@ public class TransactionalMessageBridge {
     }
 
     public PutMessageResult putHalfMessage(MessageExtBrokerInner messageInner) {
+        // k3 parseHalfMessageInner
         return store.putMessage(parseHalfMessageInner(messageInner));
     }
 
+    /**
+     * k2 事务消息备份原topic、原queueId，更改topic为RMQ_SYS_TRANS_HALF_TOPIC，queueId为0
+     * @param msgInner
+     * @return
+     */
     private MessageExtBrokerInner parseHalfMessageInner(MessageExtBrokerInner msgInner) {
         MessageAccessor.putProperty(msgInner, MessageConst.PROPERTY_REAL_TOPIC, msgInner.getTopic());
         MessageAccessor.putProperty(msgInner, MessageConst.PROPERTY_REAL_QUEUE_ID,

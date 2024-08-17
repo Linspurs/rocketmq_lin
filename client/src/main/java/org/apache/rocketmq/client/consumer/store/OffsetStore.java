@@ -24,7 +24,8 @@ import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
 /**
- * Offset store interface
+ * k1 消息消费进度
+ *  Offset store interface
  */
 public interface OffsetStore {
     /**

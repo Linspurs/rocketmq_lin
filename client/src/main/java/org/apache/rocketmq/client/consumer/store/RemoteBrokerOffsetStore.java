@@ -38,6 +38,7 @@ import org.apache.rocketmq.remoting.exception.RemotingException;
 
 /**
  * Remote storage implementation
+ * k2 集群模式下的消费进度管理
  */
 public class RemoteBrokerOffsetStore implements OffsetStore {
     private final static InternalLogger log = ClientLogger.getLog();
@@ -86,6 +87,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
                         return -1;
                     }
                 }
+                // k3 RebalancePushImpl.computePullFromWhere 传参为 READ_FROM_STORE
                 case READ_FROM_STORE: {
                     try {
                         long brokerOffset = this.fetchConsumeOffsetFromBroker(mq);
@@ -94,6 +96,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
                         return brokerOffset;
                     }
                     // No offset in broker
+                    // k3 消费者组没有在broker没有消费位点时，client端抛出MQBrokerException
                     catch (MQBrokerException e) {
                         return -1;
                     }

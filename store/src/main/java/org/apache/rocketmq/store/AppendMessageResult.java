@@ -17,12 +17,14 @@
 package org.apache.rocketmq.store;
 
 /**
- * When write a message to the commit log, returns results
+ * k1
+ *  When write a message to the commit log, returns results
  */
 public class AppendMessageResult {
     // Return code
     private AppendMessageStatus status;
-    // Where to start writing
+    // k3 消息的物理偏移量
+    //  Where to start writing
     private long wroteOffset;
     // Write Bytes
     private int wroteBytes;
@@ -30,7 +32,8 @@ public class AppendMessageResult {
     private String msgId;
     // Message storage timestamp
     private long storeTimestamp;
-    // Consume queue's offset(step by one)
+    // k3 ConsumeQueue的逻辑偏移量，类似数组下标
+    //  Consume queue's offset(step by one)
     private long logicsOffset;
     private long pagecacheRT = 0;
 

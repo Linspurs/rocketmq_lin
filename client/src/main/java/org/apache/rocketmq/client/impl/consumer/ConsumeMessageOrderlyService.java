@@ -48,8 +48,12 @@ import org.apache.rocketmq.common.protocol.body.ConsumeMessageDirectlyResult;
 import org.apache.rocketmq.common.protocol.heartbeat.MessageModel;
 import org.apache.rocketmq.remoting.common.RemotingHelper;
 
+/**
+ * k1 消费者端顺序消费
+ */
 public class ConsumeMessageOrderlyService implements ConsumeMessageService {
     private static final InternalLogger log = ClientLogger.getLog();
+    // k3 每次消费任务的最大持续时间，默认60s
     private final static long MAX_TIME_CONSUME_CONTINUOUSLY =
         Long.parseLong(System.getProperty("rocketmq.client.maxTimeConsumeContinuously", "60000"));
     private final DefaultMQPushConsumerImpl defaultMQPushConsumerImpl;
@@ -58,6 +62,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
     private final BlockingQueue<Runnable> consumeRequestQueue;
     private final ThreadPoolExecutor consumeExecutor;
     private final String consumerGroup;
+    // k3 消费端消费队列锁容器，内部持有 ConcurrentMap<MessageQueue, Object> mqLockTable
     private final MessageQueueLock messageQueueLock = new MessageQueueLock();
     private final ScheduledExecutorService scheduledExecutorService;
     private volatile boolean stopped = false;
@@ -73,6 +78,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
 
         this.consumeExecutor = new ThreadPoolExecutor(
             this.defaultMQPushConsumer.getConsumeThreadMin(),
+                // k3 任务队列为LinkedBlockingQueue，ConsumeThreadMax将失效
             this.defaultMQPushConsumer.getConsumeThreadMax(),
             1000 * 60,
             TimeUnit.MILLISECONDS,
@@ -82,6 +88,12 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
         this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl("ConsumeMessageScheduledThread_"));
     }
 
+    /**
+     * k2 集群模式，启动定时任务，默认每20s执行一次锁定分配给自己的队列
+     *  集群模式下，顺序消息消费在创建拉取任务时并未将ProcessQueue的locked设置为true，
+     *  在未锁定消息队列之前无法执行消息拉取任务，ConsumeMessageOrderlyService以20s的频率
+     *  对分配给自己的消息队列自动加锁，从而消费加锁成功的消息消费队列
+     */
     public void start() {
         if (MessageModel.CLUSTERING.equals(ConsumeMessageOrderlyService.this.defaultMQPushConsumerImpl.messageModel())) {
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
@@ -187,6 +199,14 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
         return result;
     }
 
+    /**
+     * k2 提交消费任务
+     *  顺序消费的ConsumeRequest不会直接消费本次拉取的消息，而是在消息消费时从处理队列中拉取消息
+     * @param msgs
+     * @param processQueue
+     * @param messageQueue
+     * @param dispathToConsume
+     */
     @Override
     public void submitConsumeRequest(
         final List<MessageExt> msgs,
@@ -273,6 +293,11 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                     break;
                 case SUSPEND_CURRENT_QUEUE_A_MOMENT:
                     this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, consumeRequest.getMessageQueue().getTopic(), msgs.size());
+                    //k3 顺序消费没有重试队列
+                    // 如果消息重试次数已超标，则直接发回broker端的死信队列，rqm将不再重新消费，需要人工干预，
+                    //   如果成功发回broker，将ProcessQueue().commit()表示这批消息消费成功
+                    // 如果重试次数未超标，则执行重试，重新放回TreeMap中，默认延迟1s后再提交消费任务
+                    //
                     if (checkReconsumeTimes(msgs)) {
                         consumeRequest.getProcessQueue().makeMessageToCosumeAgain(msgs);
                         this.submitConsumeRequestLater(
@@ -399,13 +424,18 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
 
         @Override
         public void run() {
+            // k3 如果是丢弃状态，则停止本次消费任务
             if (this.processQueue.isDropped()) {
                 log.warn("run, the message queue not be able to consume, because it's dropped. {}", this.messageQueue);
                 return;
             }
 
+            // k3 根据消息队列获取一个对象，消费时申请独占锁，顺序消费的并发度为消息队列，
+            //  即一个消息队列同一时刻只会被一个消费者线程池中的线程消费，一个消费者同一时刻可以分配多个消费队列
             final Object objLock = messageQueueLock.fetchLockObject(this.messageQueue);
             synchronized (objLock) {
+                // k3 广播模式直接消费，无需锁processQueue，因为相互直接无竞争
+                //  集群模式，消费前提是processQueue被锁定且锁未超时，如果未锁定则延迟该队列的消费
                 if (MessageModel.BROADCASTING.equals(ConsumeMessageOrderlyService.this.defaultMQPushConsumerImpl.messageModel())
                     || (this.processQueue.isLocked() && !this.processQueue.isLockExpired())) {
                     final long beginTime = System.currentTimeMillis();
@@ -429,7 +459,10 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                             break;
                         }
 
+                        // k3 顺序消费处理逻辑，每一个ConsumeRequest不是以消费消息条数计算，而是根据消费时间，默认当消费时长大于60s，
+                        //  本次消费任务结束，由消费组内其他线程继续消费
                         long interval = System.currentTimeMillis() - beginTime;
+                        // 60s
                         if (interval > MAX_TIME_CONSUME_CONTINUOUSLY) {
                             ConsumeMessageOrderlyService.this.submitConsumeRequestLater(processQueue, messageQueue, 10);
                             break;
@@ -438,6 +471,8 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                         final int consumeBatchSize =
                             ConsumeMessageOrderlyService.this.defaultMQPushConsumer.getConsumeMessageBatchMaxSize();
 
+                        // k3 每次从processQueue按顺序取出consumeBatchSize消息，如果未取到，则设置continueConsume未false，本次消费任务结束
+                        //  顺序消费时，从processQueue取出的消息会临时存储在processQueue的consumingMsgOrderlyTreeMap
                         List<MessageExt> msgs = this.processQueue.takeMessags(consumeBatchSize);
                         if (!msgs.isEmpty()) {
                             final ConsumeOrderlyContext context = new ConsumeOrderlyContext(this.messageQueue);
@@ -454,6 +489,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                                 consumeMessageContext.setSuccess(false);
                                 // init the consume context type
                                 consumeMessageContext.setProps(new HashMap<String, String>());
+                                // k3 执行消费前钩子函数
                                 ConsumeMessageOrderlyService.this.defaultMQPushConsumerImpl.executeHookBefore(consumeMessageContext);
                             }
 
@@ -461,6 +497,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                             ConsumeReturnType returnType = ConsumeReturnType.SUCCESS;
                             boolean hasException = false;
                             try {
+                                // k3 申请消费锁，如果processQueue被丢弃，放弃该队列的消费
                                 this.processQueue.getLockConsume().lock();
                                 if (this.processQueue.isDropped()) {
                                     log.warn("consumeMessage, the message queue not be able to consume, because it's dropped. {}",
@@ -468,6 +505,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                                     break;
                                 }
 
+                                // k3 执行业务消费监听器
                                 status = messageListener.consumeMessage(Collections.unmodifiableList(msgs), context);
                             } catch (Throwable e) {
                                 log.warn("consumeMessage exception: {} Group: {} Msgs: {} MQ: {}",
@@ -480,6 +518,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                                 this.processQueue.getLockConsume().unlock();
                             }
 
+                            // k3 通知broker消费结果，即使业务消费异常也会执行后钩子函数
                             if (null == status
                                 || ConsumeOrderlyStatus.ROLLBACK == status
                                 || ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT == status) {
@@ -522,6 +561,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                             ConsumeMessageOrderlyService.this.getConsumerStatsManager()
                                 .incConsumeRT(ConsumeMessageOrderlyService.this.consumerGroup, messageQueue.getTopic(), consumeRT);
 
+                            // k3 SUCCESS，执行ProcessQueue().commit()，返回待更新的消费进度
                             continueConsume = ConsumeMessageOrderlyService.this.processConsumeResult(msgs, status, context, this);
                         } else {
                             continueConsume = false;

@@ -20,7 +20,22 @@ import java.util.List;
 import org.apache.rocketmq.common.message.MessageQueue;
 
 /**
- * Strategy Algorithm for message allocating between consumers
+ * K1 分配算法 队列q1 q2 q3 q4 q5 q6 q7 q8| 消费者 c1 c2 c3<p>
+ *  1、平均:
+ *      c1-- q1 q2 q3
+ *      c2-- q4 q5 q6
+ *      c3-- q7 q8
+ *  2、平均轮询:
+ *      c1-- q1 q4 q7
+ *      c2-- q2 q5 q8
+ *      c3-- q3 q6
+ *  3、一致性hash
+ *  4、根据配置
+ *  5、根据broker部署机房
+ *  注意：
+ *      一个consumer可分配多个queue，一个queue只能有一个consumer，
+ *      如果consumer个数大于queue个数，则有些consumer将消费不到消息
+ *  Strategy Algorithm for message allocating between consumers
  */
 public interface AllocateMessageQueueStrategy {
 

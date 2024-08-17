@@ -26,6 +26,7 @@ public class MQFaultStrategy {
     private final static InternalLogger log = ClientLogger.getLog();
     private final LatencyFaultTolerance<String> latencyFaultTolerance = new LatencyFaultToleranceImpl();
 
+    // k3 默认不启用broker故障延迟机制
     private boolean sendLatencyFaultEnable = false;
 
     private long[] latencyMax = {50L, 100L, 550L, 1000L, 2000L, 3000L, 15000L};
@@ -56,14 +57,18 @@ public class MQFaultStrategy {
     }
 
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
+       //k3 默认不启用broker故障延迟机制
         if (this.sendLatencyFaultEnable) {
+            // k3 启用broker故障延迟机制
             try {
+                // k3 轮询获取一个消息队列
                 int index = tpInfo.getSendWhichQueue().getAndIncrement();
                 for (int i = 0; i < tpInfo.getMessageQueueList().size(); i++) {
                     int pos = Math.abs(index++) % tpInfo.getMessageQueueList().size();
                     if (pos < 0)
                         pos = 0;
                     MessageQueue mq = tpInfo.getMessageQueueList().get(pos);
+                    // k3 验证该消息队列是否可用
                     if (latencyFaultTolerance.isAvailable(mq.getBrokerName())) {
                         if (null == lastBrokerName || mq.getBrokerName().equals(lastBrokerName))
                             return mq;
@@ -80,6 +85,7 @@ public class MQFaultStrategy {
                     }
                     return mq;
                 } else {
+                    // k3 移除latencyFaultTolerance的topic条目
                     latencyFaultTolerance.remove(notBestBroker);
                 }
             } catch (Exception e) {
@@ -89,6 +95,7 @@ public class MQFaultStrategy {
             return tpInfo.selectOneMessageQueue();
         }
 
+        // k3 默认不启用broker故障延迟机制
         return tpInfo.selectOneMessageQueue(lastBrokerName);
     }
 

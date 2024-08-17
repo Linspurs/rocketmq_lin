@@ -99,6 +99,13 @@ public class MessageClientIDSetter {
         return result;
     }
 
+    /**
+     * k2 UniqID = FIX_STRING + 唯一 ID 生成算法
+     *    FIX_STRING固定字符串：客户端的IP、进程ID、MessageClientIDSetter的类加载器的 hashcode。
+     *    生成算法 ：当前时间与系统启动时间的差值，以及自增序号。
+     *
+     * @return
+     */
     public static String createUniqID() {
         StringBuilder sb = new StringBuilder(LEN * 2);
         sb.append(FIX_STRING);

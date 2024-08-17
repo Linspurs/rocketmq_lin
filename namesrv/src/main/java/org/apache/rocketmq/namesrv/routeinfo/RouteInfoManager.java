@@ -45,13 +45,26 @@ import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 import org.apache.rocketmq.common.sysflag.TopicSysFlag;
 import org.apache.rocketmq.remoting.common.RemotingUtil;
 
+/**
+ * k3 亮点：更新路由表使用了锁粒度较小的读写锁，允许多个producer并发读，保证消息发送的高并发
+ *  但同一时刻nameserver只处理一个broker心跳，多个心跳包串行处理
+ */
 public class RouteInfoManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
+    // NameServer 与 Broker 空闲时长，默认2分钟，在2分钟内 Nameserver 没有收到 Broker 的心跳包，则关闭该连接。
     private final static long BROKER_CHANNEL_EXPIRED_TIME = 1000 * 60 * 2;
+    // 读写锁，用来保护非线程安全容器 HashMap。
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    // 主题与队列关系，记录一个主题的队列分布在哪些Broker上，每个Broker上存在该主题的队列个数。
     private final HashMap<String/* topic */, List<QueueData>> topicQueueTable;
+    // 所有 Broker 信息，使用 brokerName 当key, BrokerData 信息描述每一个 broker 信息。
     private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
+    // broker 集群信息，每个集群包含哪些 Broker
     private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
+    /**
+     * 当前存活的 Broker,该信息不是实时的，NameServer 每10S扫描一次所有的 broker,根据心跳包的时间得知 broker的状态，
+     * 该机制也是导致当一个 Broker 进程假死后，消息生产者无法立即感知，可能继续向其发送消息，导致失败（非高可用）
+     */
     private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
     private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
 
@@ -99,6 +112,7 @@ public class RouteInfoManager {
         return topicList.encode();
     }
 
+    // k2 注册broker
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
@@ -111,6 +125,7 @@ public class RouteInfoManager {
         RegisterBrokerResult result = new RegisterBrokerResult();
         try {
             try {
+                // k3 step1 加写锁，防止并发修改路由表
                 this.lock.writeLock().lockInterruptibly();
 
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
@@ -120,8 +135,10 @@ public class RouteInfoManager {
                 }
                 brokerNames.add(brokerName);
 
+                // 表示 非第一次注册
                 boolean registerFirst = false;
 
+                // K3 维护brokerData
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null == brokerData) {
                     registerFirst = true;
@@ -131,10 +148,9 @@ public class RouteInfoManager {
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
-                if (null != topicConfigWrapper
-                    && MixAll.MASTER_ID == brokerId) {
-                    if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
-                        || registerFirst) {
+                // k3 step3 broker为master且topic配置信息发生变化或是首次注册，则更新topic路由表
+                if (null != topicConfigWrapper && MixAll.MASTER_ID == brokerId) {
+                    if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion()) || registerFirst) {
                         ConcurrentMap<String, TopicConfig> tcTable =
                             topicConfigWrapper.getTopicConfigTable();
                         if (tcTable != null) {
@@ -145,6 +161,7 @@ public class RouteInfoManager {
                     }
                 }
 
+                // k3 step4 更新brokerLiveTable
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -155,6 +172,7 @@ public class RouteInfoManager {
                     log.info("new broker registered, {} HAServer: {}", brokerAddr, haServerAddr);
                 }
 
+                // k3 更新broker的过滤器server地址
                 if (filterServerList != null) {
                     if (filterServerList.isEmpty()) {
                         this.filterServerTable.remove(brokerAddr);
@@ -277,6 +295,7 @@ public class RouteInfoManager {
         return wipeTopicCnt;
     }
 
+    // k3 注销broker
     public void unregisterBroker(
         final String clusterName,
         final String brokerAddr,
@@ -415,6 +434,14 @@ public class RouteInfoManager {
         return null;
     }
 
+    /**
+     * k3
+     *  每隔10s扫描BrokerLiveInfo
+     *  broker启动时向所有nameserver发送注册请求，每隔30s发送心跳包，nameserver收到心跳包
+     *  更新brokerLiveTable缓存中BrokerLive的lastUpdateTimestamp，
+     *  nameserver每隔10s扫描brokerLiveTable，若连续120未更新，则移除该broker的路由信息并关闭socket
+     */
+
     public void scanNotActiveBroker() {
         Iterator<Entry<String, BrokerLiveInfo>> it = this.brokerLiveTable.entrySet().iterator();
         while (it.hasNext()) {
@@ -429,6 +456,10 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * k3
+     *  更新topicQueueTable、brokerAddrTable、brokerLiveTable、filterServerTable
+     */
     public void onChannelDestroy(String remoteAddr, Channel channel) {
         String brokerAddrFound = null;
         if (channel != null) {
@@ -550,6 +581,7 @@ public class RouteInfoManager {
         }
     }
 
+    // k3 打印路由信息五张hashmap-topicQueueTable、brokerAddrTable
     public void printAllPeriodically() {
         try {
             try {

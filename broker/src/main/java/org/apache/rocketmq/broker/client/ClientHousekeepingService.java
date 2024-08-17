@@ -27,6 +27,11 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.remoting.ChannelEventListener;
 
+
+/**
+ * k1 每10s扫描异常的客户端，移除120s未发送心跳的客户端
+ *  客户端异常下线最长可能造成10s+120s 未感知
+ */
 public class ClientHousekeepingService implements ChannelEventListener {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final BrokerController brokerController;
@@ -40,10 +45,11 @@ public class ClientHousekeepingService implements ChannelEventListener {
 
     public void start() {
 
+        // k3 每10s扫描异常的客户端
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
-                try {
+                 try {
                     ClientHousekeepingService.this.scanExceptionChannel();
                 } catch (Throwable e) {
                     log.error("Error occurred when scan not active client channels.", e);

@@ -148,12 +148,14 @@ public class AllocateMappedFileService extends ServiceThread {
     }
 
     /**
-     * Only interrupted by the external thread, will return false
+     * k2
+     *  Only interrupted by the external thread, will return false
      */
     private boolean mmapOperation() {
         boolean isSuccess = false;
         AllocateRequest req = null;
         try {
+            //  k3 从 requestQueue 阻塞队列中获取 AllocateRequest  任务。
             req = this.requestQueue.take();
             AllocateRequest expectedRequest = this.requestTable.get(req.getFilePath());
             if (null == expectedRequest) {
@@ -170,6 +172,8 @@ public class AllocateMappedFileService extends ServiceThread {
             if (req.getMappedFile() == null) {
                 long beginTime = System.currentTimeMillis();
 
+                // k3 判断是否开启 isTransientStorePoolEnable ，如果开启则使用直接内存进行写入数据，
+                //  最后从直接内存中 commit 到 FileChannel 中。
                 MappedFile mappedFile;
                 if (messageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
                     try {
@@ -180,6 +184,7 @@ public class AllocateMappedFileService extends ServiceThread {
                         mappedFile = new MappedFile(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
                     }
                 } else {
+                    // k3 使用 mmap 方式创建 MappedFile
                     mappedFile = new MappedFile(req.getFilePath(), req.getFileSize());
                 }
 

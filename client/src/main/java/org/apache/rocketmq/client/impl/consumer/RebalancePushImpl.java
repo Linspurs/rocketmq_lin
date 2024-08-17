@@ -77,7 +77,7 @@ public class RebalancePushImpl extends RebalanceImpl {
             }
         }
 
-        // notify broker
+        // k2 通知broker，broker收到后立即向其他consumer实例发出重新负载的通知 notify broker
         this.getmQClientFactory().sendHeartbeatToAllBrokerWithLock();
     }
 
@@ -140,6 +140,7 @@ public class RebalancePushImpl extends RebalanceImpl {
     @Override
     public long computePullFromWhere(MessageQueue mq) {
         long result = -1;
+        // k3 默认 CONSUME_FROM_LAST_OFFSET
         final ConsumeFromWhere consumeFromWhere = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getConsumeFromWhere();
         final OffsetStore offsetStore = this.defaultMQPushConsumerImpl.getOffsetStore();
         switch (consumeFromWhere) {
@@ -147,6 +148,7 @@ public class RebalancePushImpl extends RebalanceImpl {
             case CONSUME_FROM_MIN_OFFSET:
             case CONSUME_FROM_MAX_OFFSET:
             case CONSUME_FROM_LAST_OFFSET: {
+                // k3 消费者组第一次上线，lastOffset = -1
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
                     result = lastOffset;
@@ -154,9 +156,11 @@ public class RebalancePushImpl extends RebalanceImpl {
                 // First start,no offset
                 else if (-1 == lastOffset) {
                     if (mq.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
+                        // k3 重试队列，返回0
                         result = 0L;
                     } else {
                         try {
+                            // k3 普通topic，返回当前consumer queue的最大位点
                             result = this.mQClientFactory.getMQAdminImpl().maxOffset(mq);
                         } catch (MQClientException e) {
                             result = -1;
@@ -179,6 +183,7 @@ public class RebalancePushImpl extends RebalanceImpl {
                 break;
             }
             case CONSUME_FROM_TIMESTAMP: {
+                //k3 CONSUME_FROM_TIMESTAMP只在第一次上线有效，之后上线，broker都存有消费位点lastOffset > 0
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
                     result = lastOffset;

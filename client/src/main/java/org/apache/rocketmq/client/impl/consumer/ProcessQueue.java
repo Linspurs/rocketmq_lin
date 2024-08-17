@@ -35,7 +35,10 @@ import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.protocol.body.ProcessQueueInfo;
 
 /**
- * Queue consumption snapshot
+ *  k1 ProcessQueue是MessageQueue在消费端的重现、快照
+ *   Queue consumption snapshot
+ *   PullMessageService默认从broker每次拉取32条消息，按消息的队列偏移量存放在ProcessQueue中，
+ *   PullMessageService将消息提交到消费者消费线程，消息成功消费后，从ProcessQueue中移除
  */
 public class ProcessQueue {
     public final static long REBALANCE_LOCK_MAX_LIVE_TIME =
@@ -44,12 +47,16 @@ public class ProcessQueue {
     private final static long PULL_MAX_IDLE_TIME = Long.parseLong(System.getProperty("rocketmq.client.pull.pullMaxIdleTime", "120000"));
     private final InternalLogger log = ClientLogger.getLog();
     private final ReadWriteLock lockTreeMap = new ReentrantReadWriteLock();
+    /*
+        k3 key为消息在consumequeue中的偏移量, 小顶堆
+     */
     private final TreeMap<Long, MessageExt> msgTreeMap = new TreeMap<Long, MessageExt>();
     private final AtomicLong msgCount = new AtomicLong();
     private final AtomicLong msgSize = new AtomicLong();
     private final Lock lockConsume = new ReentrantLock();
     /**
-     * A subset of msgTreeMap, will only be used when orderly consume
+     *  k3 用于处理顺序消息，消费线程从ProcessQueue的msgTreeMap中取出消息前，先将消息临时存储在consumingMsgOrderlyTreeMap
+     *   A subset of msgTreeMap, will only be used when orderly consume
      */
     private final TreeMap<Long, MessageExt> consumingMsgOrderlyTreeMap = new TreeMap<Long, MessageExt>();
     private final AtomicLong tryUnlockTimes = new AtomicLong(0);
@@ -57,6 +64,11 @@ public class ProcessQueue {
     private volatile boolean dropped = false;
     private volatile long lastPullTimestamp = System.currentTimeMillis();
     private volatile long lastConsumeTimestamp = System.currentTimeMillis();
+    /*
+     k3 消息队列锁
+      顺序消费的各个环节基本都是围绕MessageQueue与ProcessQueue，消费进度拉取，进度消费都要判断locked是否为true
+      locked为true的前提：消费者cid向broker发送锁定请求并返回加锁成功
+     */
     private volatile boolean locked = false;
     private volatile long lastLockTimestamp = System.currentTimeMillis();
     private volatile boolean consuming = false;
@@ -74,17 +86,22 @@ public class ProcessQueue {
      * @param pushConsumer
      */
     public void cleanExpiredMsg(DefaultMQPushConsumer pushConsumer) {
+        // k3 顺序消费无超时清理，因为会改变原顺序
         if (pushConsumer.getDefaultMQPushConsumerImpl().isConsumeOrderly()) {
             return;
         }
 
+        // k3 从msgTreeMap中找出消费超过15分钟的消息，然后发回broker，延迟时间为1分钟
+        //   最多清理16条
         int loop = msgTreeMap.size() < 16 ? msgTreeMap.size() : 16;
         for (int i = 0; i < loop; i++) {
             MessageExt msg = null;
             try {
                 this.lockTreeMap.readLock().lockInterruptibly();
                 try {
-                    if (!msgTreeMap.isEmpty() && System.currentTimeMillis() - Long.parseLong(MessageAccessor.getConsumeStartTimeStamp(msgTreeMap.firstEntry().getValue())) > pushConsumer.getConsumeTimeout() * 60 * 1000) {
+                    if (!msgTreeMap.isEmpty() &&
+                            System.currentTimeMillis() - Long.parseLong(MessageAccessor.getConsumeStartTimeStamp(msgTreeMap.firstEntry().getValue()))
+                                    > pushConsumer.getConsumeTimeout() * 60 * 1000) {
                         msg = msgTreeMap.firstEntry().getValue();
                     } else {
 
@@ -200,6 +217,7 @@ public class ProcessQueue {
                     }
                     msgCount.addAndGet(removedCnt);
 
+                    //k3 总是返回最小位点
                     if (!msgTreeMap.isEmpty()) {
                         result = msgTreeMap.firstKey();
                     }
@@ -256,6 +274,12 @@ public class ProcessQueue {
         }
     }
 
+    /**
+     * k2 提交
+     *  将该批消息从ProcessQueue中移除，维护msgCount（ProcessQueue中的消息条数）并获取消息消费的偏移量，
+     *  然后将该批消息从consumingMsgOrderlyTreeMap中移除，并返回待保存的消息消费进度（offset+1）
+     * @return
+     */
     public long commit() {
         try {
             this.lockTreeMap.writeLock().lockInterruptibly();

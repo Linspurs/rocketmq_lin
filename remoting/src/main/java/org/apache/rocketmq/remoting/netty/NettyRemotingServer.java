@@ -101,6 +101,9 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         this.publicExecutor = Executors.newFixedThreadPool(publicThreadNums, new ThreadFactory() {
             private AtomicInteger threadIndex = new AtomicInteger(0);
 
+            /**
+             *含义：Netty public 任务线程池格式。线程名称：NettyServerPublicExecutor_。
+             */
             @Override
             public Thread newThread(Runnable r) {
                 return new Thread(r, "NettyServerPublicExecutor_" + this.threadIndex.incrementAndGet());
@@ -136,6 +139,11 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 }
             });
 
+            /**
+             * 含义：Netty IO 线程个数，Selector 所在的线程个数，也就主从 Reactor 模型中的从 Reactor 线程数量 。
+             * 线程名称：NettyServerNIOSelector_。
+             * 作用范围：broker,product,consume 服务端的IO线程数量。
+             */
             this.eventLoopGroupSelector = new NioEventLoopGroup(nettyServerConfig.getServerSelectorThreads(), new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
                 private int threadTotal = nettyServerConfig.getServerSelectorThreads();

@@ -39,7 +39,7 @@ import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.config.BrokerRole;
 
 /**
- * EndTransaction processor: process commit and rollback message
+ *  k1 EndTransaction processor: process commit and rollback message
  */
 public class EndTransactionProcessor implements NettyRequestProcessor {
     private static final InternalLogger LOGGER = InternalLoggerFactory.getLogger(LoggerName.TRANSACTION_LOGGER_NAME);
@@ -63,6 +63,7 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
         }
 
         if (requestHeader.getFromTransactionCheck()) {
+            // k3 TransactionListener.checkLocalTransaction时的rpc
             switch (requestHeader.getCommitOrRollback()) {
                 case MessageSysFlag.TRANSACTION_NOT_TYPE: {
                     LOGGER.warn("Check producer[{}] transaction state, but it's pending status."
@@ -95,6 +96,7 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
                     return null;
             }
         } else {
+            // k3 TransactionListener.executeLocalTransaction时的rpc
             switch (requestHeader.getCommitOrRollback()) {
                 case MessageSysFlag.TRANSACTION_NOT_TYPE: {
                     LOGGER.warn("The producer[{}] end transaction in sending message,  and it's pending status."
@@ -122,18 +124,31 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
             }
         }
         OperationResult result = new OperationResult();
+        /* k3 COMMIT
+            恢复topic、queueId
+            再次存入CommitLog
+            删除HalfMsg，并非真正删除，而是存入RMQ_SYS_TRANS_OP_HALF_TOPIC中
+         */
+
         if (MessageSysFlag.TRANSACTION_COMMIT_TYPE == requestHeader.getCommitOrRollback()) {
+            // k3 根据request中的CommitLogOffset取出halfMsg
             result = this.brokerController.getTransactionalMessageService().commitMessage(requestHeader);
             if (result.getResponseCode() == ResponseCode.SUCCESS) {
                 RemotingCommand res = checkPrepareMessage(result.getPrepareMessage(), requestHeader);
                 if (res.getCode() == ResponseCode.SUCCESS) {
+                    // k3 恢复topic、queueId
                     MessageExtBrokerInner msgInner = endMessageTransaction(result.getPrepareMessage());
                     msgInner.setSysFlag(MessageSysFlag.resetTransactionValue(msgInner.getSysFlag(), requestHeader.getCommitOrRollback()));
                     msgInner.setQueueOffset(requestHeader.getTranStateTableOffset());
                     msgInner.setPreparedTransactionOffset(requestHeader.getCommitLogOffset());
                     msgInner.setStoreTimestamp(result.getPrepareMessage().getStoreTimestamp());
+                    // k3 再次存入CommitLog
                     RemotingCommand sendResult = sendFinalMessage(msgInner);
                     if (sendResult.getCode() == ResponseCode.SUCCESS) {
+                        // k3 删除HalfMsg，并非真正删除，而是存入RMQ_SYS_TRANS_OP_HALF_TOPIC中
+                        //  删除prepare消息，其实就是向RMQ_SYS_TRANS_OP_HALF_TOPIC主题写入消息，tag是d
+                        //  因为RocketMQ是追加消息，不支持更改和删除，所以删除就是在特有的主题下新增一条消息
+                        //  这样无论是提交还是回滚，都可以找到，以此来判断是回滚还是提交了。如果没有则是未知状态
                         this.brokerController.getTransactionalMessageService().deletePrepareMessage(result.getPrepareMessage());
                     }
                     return sendResult;
@@ -141,6 +156,10 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
                 return res;
             }
         } else if (MessageSysFlag.TRANSACTION_ROLLBACK_TYPE == requestHeader.getCommitOrRollback()) {
+            /*
+              k3 ROLLBACK
+                 删除HalfMsg，并非真正删除，而是存入RMQ_SYS_TRANS_OP_HALF_TOPIC中
+             */
             result = this.brokerController.getTransactionalMessageService().rollbackMessage(requestHeader);
             if (result.getResponseCode() == ResponseCode.SUCCESS) {
                 RemotingCommand res = checkPrepareMessage(result.getPrepareMessage(), requestHeader);

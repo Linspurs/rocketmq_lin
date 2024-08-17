@@ -51,7 +51,11 @@ import java.net.SocketAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 
+/**
+ * k2 消息发送的处理类
+ */
 public abstract class AbstractSendMessageProcessor implements NettyRequestProcessor {
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
 

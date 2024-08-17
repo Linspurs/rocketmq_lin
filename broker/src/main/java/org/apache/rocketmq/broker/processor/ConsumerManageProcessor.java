@@ -115,6 +115,13 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
         return response;
     }
 
+    /**
+     *  k2 consumer client 询问 本消费者组 的 该topic的该queue的消费位点
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     private RemotingCommand queryConsumerOffset(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
         final RemotingCommand response =
@@ -125,18 +132,25 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
             (QueryConsumerOffsetRequestHeader) request
                 .decodeCommandCustomHeader(QueryConsumerOffsetRequestHeader.class);
 
+        // k3 消费者组第一次上线 或 此topic没消息 返回-1，其他情况返回已消费的位点
         long offset =
             this.brokerController.getConsumerOffsetManager().queryOffset(
                 requestHeader.getConsumerGroup(), requestHeader.getTopic(), requestHeader.getQueueId());
 
         if (offset >= 0) {
+            // k3 非第一次上线，broker中存有之前的消费位点
             responseHeader.setOffset(offset);
             response.setCode(ResponseCode.SUCCESS);
             response.setRemark(null);
         } else {
+            // k3 offset = -1 代表 第一次上线 或 broker中没有该消费者组的位点信息
+            //  topic下的ConsumeQueue还没有消息，或当前返回-1，否则返回ConsumeQueue的最小位点（最小位点可能为0）
             long minOffset =
                 this.brokerController.getMessageStore().getMinOffsetInQueue(requestHeader.getTopic(),
                     requestHeader.getQueueId());
+
+            // k3 第一个条件：topic下的ConsumeQueue未有消息
+            //    第二个条件：consumeOffset为0时，还在内存
             if (minOffset <= 0
                 && !this.brokerController.getMessageStore().checkInDiskByConsumeOffset(
                 requestHeader.getTopic(), requestHeader.getQueueId(), 0)) {
@@ -144,6 +158,7 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
                 response.setCode(ResponseCode.SUCCESS);
                 response.setRemark(null);
             } else {
+                //
                 response.setCode(ResponseCode.QUERY_NOT_FOUND);
                 response.setRemark("Not found, V3_0_6_SNAPSHOT maybe this group consumer boot first");
             }

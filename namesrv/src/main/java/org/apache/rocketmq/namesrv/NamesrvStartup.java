@@ -51,6 +51,7 @@ public class NamesrvStartup {
         main0(args);
     }
 
+    // k1 nameServer启动
     public static NamesrvController main0(String[] args) {
 
         try {
@@ -79,9 +80,12 @@ public class NamesrvStartup {
             return null;
         }
 
+        // k2 step1：填充NamesrvConfig、nettyServerConfig
         final NamesrvConfig namesrvConfig = new NamesrvConfig();
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
         nettyServerConfig.setListenPort(9876);
+
+        // -c 指定配置文件路径
         if (commandLine.hasOption('c')) {
             String file = commandLine.getOptionValue('c');
             if (file != null) {
@@ -98,6 +102,7 @@ public class NamesrvStartup {
             }
         }
 
+        // -- 属性名 属性值 如 --listenPort 12345
         if (commandLine.hasOption('p')) {
             InternalLogger console = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_CONSOLE_NAME);
             MixAll.printObjectProperties(console, namesrvConfig);
@@ -123,6 +128,7 @@ public class NamesrvStartup {
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
+        // k2 step2：根据配置属性创建NamesrvController，其为NameServer核心控制类
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard
@@ -137,15 +143,18 @@ public class NamesrvStartup {
             throw new IllegalArgumentException("NamesrvController is null");
         }
 
+        // k2 step3 初始化NamesrvController
         boolean initResult = controller.initialize();
         if (!initResult) {
             controller.shutdown();
             System.exit(-3);
         }
 
+        // k2 step4：注册jvm钩子函数并启动服务器，以便监听请求。停机方式：注册jvm钩子函数，在jvm关闭之前先将线程池关闭
         Runtime.getRuntime().addShutdownHook(new ShutdownHookThread(log, new Callable<Void>() {
             @Override
             public Void call() throws Exception {
+                // 释放资源
                 controller.shutdown();
                 return null;
             }

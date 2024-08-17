@@ -73,17 +73,23 @@ public class NamesrvController {
         this.configuration.setStorePathFromConfig(this.namesrvConfig, "configStorePath");
     }
 
+    // k2 初始化NamesrvController
     public boolean initialize() {
 
         this.kvConfigManager.load();
-
+        /**
+         * 创建一个线程容量为 serverWorkerThreads 的固定长度的线程池，
+         * 该线程池供 DefaultRequestProcessor 类使用，实现具体的默认的请求命令处理。
+         */
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
 
         this.remotingExecutor =
             Executors.newFixedThreadPool(nettyServerConfig.getServerWorkerThreads(), new ThreadFactoryImpl("RemotingExecutorThread_"));
 
+        // DefaultRequestProcessor 与remotingServer创建的线程池绑定在一起。
         this.registerProcessor();
 
+        // k2 定时任务1-nameServer每隔10s扫描broker，移除处于非激活状态的broker
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -92,6 +98,7 @@ public class NamesrvController {
             }
         }, 5, 10, TimeUnit.SECONDS);
 
+        // k2 定时任务2-nameServer每隔10分钟打印kv配置
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override

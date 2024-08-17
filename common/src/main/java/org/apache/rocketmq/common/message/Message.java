@@ -22,6 +22,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * k1 消息
+ */
 public class Message implements Serializable {
     private static final long serialVersionUID = 8445773977080406428L;
 
@@ -38,6 +41,16 @@ public class Message implements Serializable {
         this(topic, "", "", 0, body, true);
     }
 
+    /**
+     * k3
+     *  全属性构造函数
+     * @param topic 主题
+     * @param tags 用于消息过滤
+     * @param keys 索引键，多个用空格隔开， 可根据key快速检索消息
+     * @param flag
+     * @param body
+     * @param waitStoreMsgOK
+     */
     public Message(String topic, String tags, String keys, int flag, byte[] body, boolean waitStoreMsgOK) {
         this.topic = topic;
         this.flag = flag;

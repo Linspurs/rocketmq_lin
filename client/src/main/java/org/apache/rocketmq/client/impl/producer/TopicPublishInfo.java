@@ -24,10 +24,23 @@ import org.apache.rocketmq.common.protocol.route.QueueData;
 import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 
 public class TopicPublishInfo {
+    // k3 是否顺序消费
     private boolean orderTopic = false;
+
     private boolean haveTopicRouterInfo = false;
+
+    // k3 该topic的消息队列
     private List<MessageQueue> messageQueueList = new ArrayList<MessageQueue>();
+
+    // k3 用于选择消息队列，每选择一次消息队列，该值会自增1，
     private volatile ThreadLocalIndex sendWhichQueue = new ThreadLocalIndex();
+
+    /**
+     * k3
+     *     private List<QueueData> queueDatas; topic队列元数据
+     *     private List<BrokerData> brokerDatas; topic分布的broker元数据
+     *     private HashMap<String (brokerAddr), List<String> (Filter Server )>filterServerTable broker上过滤服务器地址列表;
+     */
     private TopicRouteData topicRouteData;
 
     public boolean isOrderTopic() {
@@ -66,7 +79,16 @@ public class TopicPublishInfo {
         this.haveTopicRouterInfo = haveTopicRouterInfo;
     }
 
+    /**
+     * k3 选择消息队列
+     * @param lastBrokerName 上一次发送消息失败的broker
+     * @return
+     */
     public MessageQueue selectOneMessageQueue(final String lastBrokerName) {
+        /*k3
+           第一次选择消息队列时，lastBrokerName为null，sendWhichQueue-threadLocalIndex自增再获取
+           发送失败后，规避上一次的broker
+         */
         if (lastBrokerName == null) {
             return selectOneMessageQueue();
         } else {
@@ -76,6 +98,7 @@ public class TopicPublishInfo {
                 if (pos < 0)
                     pos = 0;
                 MessageQueue mq = this.messageQueueList.get(pos);
+                // K3 规避上一次的broker
                 if (!mq.getBrokerName().equals(lastBrokerName)) {
                     return mq;
                 }

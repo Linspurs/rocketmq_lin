@@ -76,6 +76,14 @@ public class MessageDecoder {
         return UtilAll.bytes2string(byteBuffer.array());
     }
 
+    public static void main(String[] args) {
+        try {
+            decodeMessageId("0A6F2FBD00002A9F0000FB4E9393893A");
+        }catch (Exception e){
+
+        }
+
+    }
     public static MessageId decodeMessageId(final String msgId) throws UnknownHostException {
         SocketAddress address;
         long offset;
@@ -482,6 +490,11 @@ public class MessageDecoder {
         return message;
     }
 
+    /**
+     * k3 批量发送 将多条消息的消息体存储在一条消息里
+     * @param messages
+     * @return
+     */
     public static byte[] encodeMessages(List<Message> messages) {
         //TO DO refactor, accumulate in one buffer, avoid copies
         List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());

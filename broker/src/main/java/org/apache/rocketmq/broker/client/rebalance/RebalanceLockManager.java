@@ -27,11 +27,17 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.message.MessageQueue;
 
+/**
+ * k1 MessageQueue加锁处理类
+ */
 public class RebalanceLockManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.REBALANCE_LOCK_LOGGER_NAME);
+    // k3 锁最大存活时间，默认60s
     private final static long REBALANCE_LOCK_MAX_LIVE_TIME = Long.parseLong(System.getProperty(
         "rocketmq.broker.rebalance.lockMaxLiveTime", "60000"));
     private final Lock lock = new ReentrantLock();
+    // k3 锁容器，key-消费组，每个队列对应一个锁对象，表示当前该队列被消费组中哪个消费者锁持有
+    //  某消费者组下当前锁定的所有queue及LockEntry（clientId、加锁时间）
     private final ConcurrentMap<String/* group */, ConcurrentHashMap<MessageQueue, LockEntry>> mqLockTable =
         new ConcurrentHashMap<String, ConcurrentHashMap<MessageQueue, LockEntry>>(1024);
 
@@ -97,6 +103,13 @@ public class RebalanceLockManager {
         return true;
     }
 
+    /**
+     *  k2 某mq是否被group下的此clientId锁定并且还未过期，若是，则更新锁定时间
+     * @param group
+     * @param mq
+     * @param clientId
+     * @return
+     */
     private boolean isLocked(final String group, final MessageQueue mq, final String clientId) {
         ConcurrentHashMap<MessageQueue, LockEntry> groupValue = this.mqLockTable.get(group);
         if (groupValue != null) {
@@ -114,12 +127,22 @@ public class RebalanceLockManager {
         return false;
     }
 
+    /**
+     * k2 consumer申请对MessageQueues加锁，返回本次加锁成功的MessageQueues
+     *  group下的此clientId申请对mqs加锁，返回此次加锁成功的queue
+     * @param group 消费者组
+     * @param mqs 消费者申请加锁的MessageQueues
+     * @param clientId 消费者cid
+     * @return cid成功加锁的MessageQueue
+     */
     public Set<MessageQueue> tryLockBatch(final String group, final Set<MessageQueue> mqs,
         final String clientId) {
         Set<MessageQueue> lockedMqs = new HashSet<MessageQueue>(mqs.size());
         Set<MessageQueue> notLockedMqs = new HashSet<MessageQueue>(mqs.size());
 
+        // k3 遍历clientId希望锁定的MessageQueue
         for (MessageQueue mq : mqs) {
+            // k3 当前MessageQueue是否已经被此clientId锁定
             if (this.isLocked(group, mq, clientId)) {
                 lockedMqs.add(mq);
             } else {
@@ -127,12 +150,16 @@ public class RebalanceLockManager {
             }
         }
 
+        // k3 clientId希望锁定的MessageQueue中有此clientId之前未加锁的，则走加锁逻辑
         if (!notLockedMqs.isEmpty()) {
             try {
                 this.lock.lockInterruptibly();
+                //k3 加锁成功
                 try {
+                    //k3  获取此consumergroup目前已经成功锁定的MessageQueue
                     ConcurrentHashMap<MessageQueue, LockEntry> groupValue = this.mqLockTable.get(group);
                     if (null == groupValue) {
+                        // k3 说明此consumergroup从未加锁过任何MessageQueue，是新上线的consumer
                         groupValue = new ConcurrentHashMap<>(32);
                         this.mqLockTable.put(group, groupValue);
                     }
@@ -140,6 +167,8 @@ public class RebalanceLockManager {
                     for (MessageQueue mq : notLockedMqs) {
                         LockEntry lockEntry = groupValue.get(mq);
                         if (null == lockEntry) {
+                            // k3 此consumergroup从未锁定过该MessageQueue
+                            //  那就new一个 LockEntry（lastUpdateTimestamp初始化为当前时间）
                             lockEntry = new LockEntry();
                             lockEntry.setClientId(clientId);
                             groupValue.put(mq, lockEntry);
@@ -151,14 +180,17 @@ public class RebalanceLockManager {
                         }
 
                         if (lockEntry.isLocked(clientId)) {
+                            // k3 是当前group的clientId且不过期，更新lastUpdateTimestamp
                             lockEntry.setLastUpdateTimestamp(System.currentTimeMillis());
                             lockedMqs.add(mq);
                             continue;
                         }
 
+                        // k3 非当前group的clientId或是已过期
                         String oldClientId = lockEntry.getClientId();
 
                         if (lockEntry.isExpired()) {
+                            // k3 oldClientId已过期，则更新为新clientId和LastUpdateTimestamp
                             lockEntry.setClientId(clientId);
                             lockEntry.setLastUpdateTimestamp(System.currentTimeMillis());
                             log.warn(
@@ -171,6 +203,8 @@ public class RebalanceLockManager {
                             continue;
                         }
 
+                        // k3 notLockedMqs里的messagequeue都没符合以上逻辑的，
+                        //  说明上次此clientId是锁定过的，此次申请加锁但未成功，被其他clientId抢走了
                         log.warn(
                             "tryLockBatch, message queue locked by other client. Group: {} OtherClientId: {} NewClientId: {} {}",
                             group,
@@ -189,6 +223,12 @@ public class RebalanceLockManager {
         return lockedMqs;
     }
 
+    /**
+     * k2 申请对MessageQueues解锁
+     * @param group
+     * @param mqs
+     * @param clientId
+     */
     public void unlockBatch(final String group, final Set<MessageQueue> mqs, final String clientId) {
         try {
             this.lock.lockInterruptibly();

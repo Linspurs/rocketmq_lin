@@ -106,13 +106,16 @@ public class ConsumerManager {
             consumerGroupInfo = prev != null ? prev : tmp;
         }
 
+        // k3 消费者实例是否变化
         boolean r1 =
             consumerGroupInfo.updateChannel(clientChannelInfo, consumeType, messageModel,
                 consumeFromWhere);
+        // k3 订阅行为是否变化
         boolean r2 = consumerGroupInfo.updateSubscription(subList);
 
         if (r1 || r2) {
             if (isNotifyConsumerIdsChangedEnable) {
+                // k3 若该消费者组发生变化，broker主动oneWay通知所有消费实例，立即触发其的doRebalance
                 this.consumerIdsChangeListener.handle(ConsumerGroupEvent.CHANGE, group, consumerGroupInfo.getAllChannel());
             }
         }

@@ -42,6 +42,7 @@ public class WaitNotifyObject {
     protected void waitForRunning(long interval) {
         synchronized (this) {
             if (this.hasNotified) {
+                // true
                 this.hasNotified = false;
                 this.onWaitEnd();
                 return;

@@ -29,21 +29,31 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 
+/**
+ * k1 映射文件队列，MappedFile的管理容器
+ *    对存储目录的封装，commitlog目录下会存在多个内存映射文件-MappedFile对象
+ */
 public class MappedFileQueue {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
     private static final InternalLogger LOG_ERROR = InternalLoggerFactory.getLogger(LoggerName.STORE_ERROR_LOGGER_NAME);
 
     private static final int DELETE_FILES_BATCH_MAX = 10;
 
+    // 存储目录
     private final String storePath;
 
+    // 单个文件的存储大小
     private final int mappedFileSize;
 
+    // MappedFile文件集合
     private final CopyOnWriteArrayList<MappedFile> mappedFiles = new CopyOnWriteArrayList<MappedFile>();
 
+    // 创建MappedFile服务类
     private final AllocateMappedFileService allocateMappedFileService;
 
+    // 当前刷盘指针，表示该指针之前的所有数据已持久化到磁盘
     private long flushedWhere = 0;
+    // 当前数据提交指针，内存中bytebuffer当前的写指针，>= flushedWhere
     private long committedWhere = 0;
 
     private volatile long storeTimestamp = 0;
@@ -74,6 +84,13 @@ public class MappedFileQueue {
         }
     }
 
+    /**
+     * k2 根据消息存储时间戳查找MappedFile，从MappedFile列表中第一个文件开始查找
+     *  到第一个 最后一次更新时间大于待查找时间戳的MappedFile，
+     *  若不存在返回最后一个MappedFile
+     * @param timestamp
+     * @return
+     */
     public MappedFile getMappedFileByTime(final long timestamp) {
         Object[] mfs = this.copyMappedFiles(0);
 
@@ -422,14 +439,22 @@ public class MappedFileQueue {
         return deleteCount;
     }
 
+    /**
+     * K2 刷盘
+     * @param flushLeastPages
+     * @return
+     */
     public boolean flush(final int flushLeastPages) {
         boolean result = true;
+        // k3 根据上次刷新的位置，得到当前的 MappedFile 对象。
         MappedFile mappedFile = this.findMappedFileByOffset(this.flushedWhere, this.flushedWhere == 0);
         if (mappedFile != null) {
             long tmpTimeStamp = mappedFile.getStoreTimestamp();
+            // k3 执行 MappedFile 的 flush 方法。
             int offset = mappedFile.flush(flushLeastPages);
             long where = mappedFile.getFileFromOffset() + offset;
             result = where == this.flushedWhere;
+            // k3 更新上次刷新的位置。
             this.flushedWhere = where;
             if (0 == flushLeastPages) {
                 this.storeTimestamp = tmpTimeStamp;
@@ -443,8 +468,10 @@ public class MappedFileQueue {
         boolean result = true;
         MappedFile mappedFile = this.findMappedFileByOffset(this.committedWhere, this.committedWhere == 0);
         if (mappedFile != null) {
+            // k3 提交
             int offset = mappedFile.commit(commitLeastPages);
             long where = mappedFile.getFileFromOffset() + offset;
+            //k3 false committedWhere目前还未变，但MappedFile.wrotePosition已经变了
             result = where == this.committedWhere;
             this.committedWhere = where;
         }
@@ -472,6 +499,8 @@ public class MappedFileQueue {
                         this.mappedFileSize,
                         this.mappedFiles.size());
                 } else {
+                    // k3 0-1024(未在内存) 1025-2048 2049-3072 3073-4096
+                    //  4000/1024 - 1025/1024 = 3- 1 = 2
                     int index = (int) ((offset / this.mappedFileSize) - (firstMappedFile.getFileFromOffset() / this.mappedFileSize));
                     MappedFile targetFile = null;
                     try {

@@ -35,8 +35,28 @@ import org.apache.rocketmq.common.protocol.heartbeat.SubscriptionData;
 public class ConsumerGroupInfo {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final String groupName;
+    /**
+     * k3  SubscriptionData
+     *     public final static String SUB_ALL = "*";
+     *     private boolean classFilterMode = false;
+     *     private String topic;
+     *     private String subString;
+     *     private Set<String> tagsSet = new HashSet<String>();
+     *     private Set<Integer> codeSet = new HashSet<Integer>();
+     *     private long subVersion = System.currentTimeMillis();
+     *     private String expressionType = ExpressionType.TAG;
+     */
     private final ConcurrentMap<String/* Topic */, SubscriptionData> subscriptionTable =
         new ConcurrentHashMap<String, SubscriptionData>();
+    /**
+     * k3 对应一个group下的每个消费者实例
+     *     ClientChannelInfo
+     *     private final Channel channel;
+     *     private final String clientId;
+     *     private final LanguageCode language;
+     *     private final int version;
+     *     private volatile long lastUpdateTimestamp
+     */
     private final ConcurrentMap<Channel, ClientChannelInfo> channelInfoTable =
         new ConcurrentHashMap<Channel, ClientChannelInfo>(16);
     private volatile ConsumeType consumeType;
@@ -120,6 +140,7 @@ public class ConsumerGroupInfo {
         this.messageModel = messageModel;
         this.consumeFromWhere = consumeFromWhere;
 
+        //k3 ConcurrentMap<Channel, ClientChannelInfo> channelInfoTable
         ClientChannelInfo infoOld = this.channelInfoTable.get(infoNew.getChannel());
         if (null == infoOld) {
             ClientChannelInfo prev = this.channelInfoTable.put(infoNew.getChannel(), infoNew);

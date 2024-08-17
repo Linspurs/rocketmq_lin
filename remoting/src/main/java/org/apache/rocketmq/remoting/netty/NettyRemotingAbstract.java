@@ -188,13 +188,21 @@ public abstract class NettyRemotingAbstract {
      *
      * @param ctx channel handler context.
      * @param cmd request command.
+     *
+     *  k2 该方法其实就是一个具体命令的处理模板（模板方法），具体的命令实现由各个子类实现，
+     *   该类的主要责任就是将命令封装成一个线程对象，然后丢到线程池去执行。
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
+        //k3 根据RemotingCommand的code获取对于的process处理器
+        //  根据处理器的类型（同步还是异步），调用对应的同步处理和异步处理的方法
+        // Pair用来封装NettyRequestProcessor与ExecuteService的绑定关系。
+        // 在RocketMQ的网络处理模型中，会为每一个NettyRequestProcessor与特定的线程池绑定，所有该NettyRequestProcessor的处理逻辑都在该线程池中运行。
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
         final Pair<NettyRequestProcessor, ExecutorService> pair = null == matched ? this.defaultRequestProcessor : matched;
         final int opaque = cmd.getOpaque();
 
         if (pair != null) {
+            // k3 定义callback把结果writeAndFlush给客户端
             Runnable run = new Runnable() {
                 @Override
                 public void run() {
@@ -232,6 +240,7 @@ public abstract class NettyRemotingAbstract {
                 }
             };
 
+            // k2 每一个请求进来都会执行是否拒绝本次Request
             if (pair.getObject1().rejectRequest()) {
                 final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_BUSY,
                     "[REJECTREQUEST]system busy, start flow control for a while");

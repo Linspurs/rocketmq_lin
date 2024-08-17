@@ -59,6 +59,10 @@ import org.apache.rocketmq.remoting.netty.NettyRemotingClient;
  * and used among multiple threads context.
  * </p>
  */
+
+/**
+ * k1 生产者
+ */
 public class DefaultMQProducer extends ClientConfig implements MQProducer {
 
     private final InternalLogger log = ClientLogger.getLog();
@@ -734,6 +738,13 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         this.defaultMQProducerImpl.setAsyncSenderExecutor(asyncSenderExecutor);
     }
 
+    /**
+     * k3 批量消息
+     *  将一批消息封装成MessageBatch对象，MessageBatch继承Message对象，只需将多条消息的消息体聚合成一个byte[]
+     * @param msgs
+     * @return
+     * @throws MQClientException
+     */
     private MessageBatch batch(Collection<Message> msgs) throws MQClientException {
         MessageBatch msgBatch;
         try {

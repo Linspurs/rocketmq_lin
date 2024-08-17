@@ -41,11 +41,14 @@ import org.apache.rocketmq.common.protocol.heartbeat.MessageModel;
 import org.apache.rocketmq.common.protocol.heartbeat.SubscriptionData;
 
 /**
- * Base class for rebalance algorithm
+ * k1 每个DefaultMQPushConsumerImpl都持有一个单独的RebalanceImpl对象
+ *  Base class for rebalance algorithm
  */
 public abstract class RebalanceImpl {
     protected static final InternalLogger log = ClientLogger.getLog();
+    // k3 当前消费者负载的消息队列缓存表
     protected final ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable = new ConcurrentHashMap<MessageQueue, ProcessQueue>(64);
+    // k3 DefaultMQPushConsumerImpl.updateTopicSubscribeInfo 去除不可读队列
     protected final ConcurrentMap<String/* topic */, Set<MessageQueue>> topicSubscribeInfoTable =
         new ConcurrentHashMap<String, Set<MessageQueue>>();
     protected final ConcurrentMap<String /* topic */, SubscriptionData> subscriptionInner =
@@ -118,6 +121,10 @@ public abstract class RebalanceImpl {
         }
     }
 
+    /**
+     * k2 将processQueueTable转换成HashMap<String(brokerName), Set<MessageQueue>>方便向broker发送锁定队列请求
+     * @return
+     */
     private HashMap<String/* brokerName */, Set<MessageQueue>> buildProcessQueueTableByBrokerName() {
         HashMap<String, Set<MessageQueue>> result = new HashMap<String, Set<MessageQueue>>();
         for (MessageQueue mq : this.processQueueTable.keySet()) {
@@ -133,6 +140,11 @@ public abstract class RebalanceImpl {
         return result;
     }
 
+    /**
+     * k2 顺序消费时需要从broker中锁定该queue
+     * @param mq
+     * @return
+     */
     public boolean lock(final MessageQueue mq) {
         FindBrokerResult findBrokerResult = this.mQClientFactory.findBrokerAddressInSubscribe(mq.getBrokerName(), MixAll.MASTER_ID, true);
         if (findBrokerResult != null) {
@@ -142,6 +154,7 @@ public abstract class RebalanceImpl {
             requestBody.getMqSet().add(mq);
 
             try {
+                // k3 org.apache.rocketmq.broker.client.rebalance.RebalanceLockManager.tryLockBatch
                 Set<MessageQueue> lockedMq =
                     this.mQClientFactory.getMQClientAPIImpl().lockBatchMQ(findBrokerResult.getBrokerAddr(), requestBody, 1000);
                 for (MessageQueue mmqq : lockedMq) {
@@ -166,7 +179,11 @@ public abstract class RebalanceImpl {
         return false;
     }
 
+    /**
+     * k2 锁定队列
+     */
     public void lockAll() {
+        // k3 将processQueueTable转换成HashMap<String(brokerName), Set<MessageQueue>>方便向broker发送锁定队列请求
         HashMap<String, Set<MessageQueue>> brokerMqs = this.buildProcessQueueTableByBrokerName();
 
         Iterator<Entry<String, Set<MessageQueue>>> it = brokerMqs.entrySet().iterator();
@@ -186,9 +203,11 @@ public abstract class RebalanceImpl {
                 requestBody.setMqSet(mqs);
 
                 try {
+                    // k3 向master-broker发送锁定，返回成功被当前消费者锁定的队列
                     Set<MessageQueue> lockOKMQSet =
                         this.mQClientFactory.getMQClientAPIImpl().lockBatchMQ(findBrokerResult.getBrokerAddr(), requestBody, 1000);
 
+                    // k3 设置锁定状态，更新锁定时间
                     for (MessageQueue mq : lockOKMQSet) {
                         ProcessQueue processQueue = this.processQueueTable.get(mq);
                         if (processQueue != null) {
@@ -201,6 +220,7 @@ public abstract class RebalanceImpl {
                         }
                     }
                     for (MessageQueue mq : mqs) {
+                        // k3 如果当前消费者不持有该队列的锁，置为false，暂停该队列的消息拉取和消费
                         if (!lockOKMQSet.contains(mq)) {
                             ProcessQueue processQueue = this.processQueueTable.get(mq);
                             if (processQueue != null) {
@@ -216,7 +236,12 @@ public abstract class RebalanceImpl {
         }
     }
 
+    /**
+     * k2 遍历订阅信息对每个topic的队列进行重新负载
+     * @param isOrder
+     */
     public void doRebalance(final boolean isOrder) {
+        // ConcurrentMap<String /* topic */, SubscriptionData>
         Map<String, SubscriptionData> subTable = this.getSubscriptionInner();
         if (subTable != null) {
             for (final Map.Entry<String, SubscriptionData> entry : subTable.entrySet()) {
@@ -238,6 +263,11 @@ public abstract class RebalanceImpl {
         return subscriptionInner;
     }
 
+    /**
+     * k2 对单个topic进行重新负载
+     * @param topic
+     * @param isOrder
+     */
     private void rebalanceByTopic(final String topic, final boolean isOrder) {
         switch (messageModel) {
             case BROADCASTING: {
@@ -258,7 +288,13 @@ public abstract class RebalanceImpl {
                 break;
             }
             case CLUSTERING: {
+                // k3 获取topic的队列信息
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+                /*
+                  k3 从broker中获取当前消费组内当前所有消费者的客户端id
+                    请求哪个broker呢？ 随机选取一个broker，如果未获取到主，也随机选取一个从
+                    消费者启动时，会向MQClientInstance中注册消费者，然后 MQClientInstance会向所有的broker发送心跳
+                 */
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
                 if (null == mqSet) {
                     if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -270,10 +306,12 @@ public abstract class RebalanceImpl {
                     log.warn("doRebalance, {} {}, get consumer id list failed", consumerGroup, topic);
                 }
 
+                // k3 其中一个为空，忽略本次负载
                 if (mqSet != null && cidAll != null) {
                     List<MessageQueue> mqAll = new ArrayList<MessageQueue>();
                     mqAll.addAll(mqSet);
 
+                    // k3 对mqAll、cidAll排序，同一个消费组内看到的视图保持一致，确保同一消费队列不会被多个消费者分配
                     Collections.sort(mqAll);
                     Collections.sort(cidAll);
 
@@ -297,12 +335,17 @@ public abstract class RebalanceImpl {
                         allocateResultSet.addAll(allocateResult);
                     }
 
+                    // K3 判断消息队列是否发生变化
                     boolean changed = this.updateProcessQueueTableInRebalance(topic, allocateResultSet, isOrder);
                     if (changed) {
                         log.info(
                             "rebalanced result changed. allocateMessageQueueStrategyName={}, group={}, topic={}, clientId={}, mqAllSize={}, cidAllSize={}, rebalanceResultSize={}, rebalanceResultSet={}",
                             strategy.getName(), consumerGroup, topic, this.mQClientFactory.getClientId(), mqSet.size(), cidAll.size(),
                             allocateResultSet.size(), allocateResultSet);
+
+                        //k3 负载发生变化时，向所有broker主动同步发送心跳，通知broker负载变化
+                        // broker若发现topic负载变化了，将向所有client one way发送通知，
+                        // client收到通知后主动执行一次doRebalance
                         this.messageQueueChanged(topic, mqSet, allocateResultSet);
                     }
                 }
@@ -328,6 +371,13 @@ public abstract class RebalanceImpl {
         }
     }
 
+    /**
+     *
+     * @param topic
+     * @param mqSet 负载均衡所分配的队列
+     * @param isOrder
+     * @return
+     */
     private boolean updateProcessQueueTableInRebalance(final String topic, final Set<MessageQueue> mqSet,
         final boolean isOrder) {
         boolean changed = false;
@@ -340,6 +390,8 @@ public abstract class RebalanceImpl {
 
             if (mq.getTopic().equals(topic)) {
                 if (!mqSet.contains(mq)) {
+                    // k3 mq-当前消费者processQueueTable缓存的队列，
+                    //  该队列已不属于当前消费者，需要停止对该队列的消费
                     pq.setDropped(true);
                     if (this.removeUnnecessaryMessageQueue(mq, pq)) {
                         it.remove();
@@ -347,6 +399,7 @@ public abstract class RebalanceImpl {
                         log.info("doRebalance, {}, remove unnecessary mq, {}", consumerGroup, mq);
                     }
                 } else if (pq.isPullExpired()) {
+                    // k3 120s
                     switch (this.consumeType()) {
                         case CONSUME_ACTIVELY:
                             break;
@@ -368,14 +421,19 @@ public abstract class RebalanceImpl {
 
         List<PullRequest> pullRequestList = new ArrayList<PullRequest>();
         for (MessageQueue mq : mqSet) {
+            // k3 processQueueTable缓存中没有包含分配的队列，说明该队列是本次新增
+            //  需要从磁盘读取该队列的消费进度，创建pullrequest
+            //  顺序消费在创建消息队列拉取任务时要在broker锁定该消息队列
             if (!this.processQueueTable.containsKey(mq)) {
                 if (isOrder && !this.lock(mq)) {
                     log.warn("doRebalance, {}, add a new mq failed, {}, because lock failed", consumerGroup, mq);
                     continue;
                 }
 
+                // k3 移除脏位点
                 this.removeDirtyOffset(mq);
                 ProcessQueue pq = new ProcessQueue();
+                // k3 计算拉取位点
                 long nextOffset = this.computePullFromWhere(mq);
                 if (nextOffset >= 0) {
                     ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
@@ -397,6 +455,7 @@ public abstract class RebalanceImpl {
             }
         }
 
+        // k3 对新分配的消息队列创建pullRequest并放入pullRequestService线程
         this.dispatchPullRequest(pullRequestList);
 
         return changed;

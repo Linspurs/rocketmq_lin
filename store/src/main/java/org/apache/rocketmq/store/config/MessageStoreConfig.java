@@ -20,21 +20,38 @@ import java.io.File;
 import org.apache.rocketmq.common.annotation.ImportantField;
 import org.apache.rocketmq.store.ConsumeQueue;
 
+/**
+ * k1 消息存储的配置文件
+ */
 public class MessageStoreConfig {
     //The root directory in which the log data is kept
+    /**
+     * 设置Broker的存储根目录，默认为 $Broker_Home/store。
+     */
     @ImportantField
     private String storePathRootDir = System.getProperty("user.home") + File.separator + "store";
 
+    /**
+     * 设置commitlog的存储目录，默认为$Broker_Home/store/commitlog。
+     */
     //The directory in which the commitlog is kept
     @ImportantField
     private String storePathCommitLog = System.getProperty("user.home") + File.separator + "store"
         + File.separator + "commitlog";
 
+    /**
+     * commitlog 文件的大小，默认为1G。
+     */
     // CommitLog file size,default is 1G
     private int mapedFileSizeCommitLog = 1024 * 1024 * 1024;
     // ConsumeQueue file size,default is 30W
     private int mapedFileSizeConsumeQueue = 300000 * ConsumeQueue.CQ_STORE_UNIT_SIZE;
     // enable consume queue ext
+    /**
+     * 是否开启 consumeQueueExt,默认为 false,就是如果消费端消息消费速度跟不上，
+     * 是否创建一个扩展的 ConsumeQueue文件，如果不开启，应该会阻塞从 commitlog 文件中获取消息，
+     * 并且 ConsumeQueue,应该是按topic独立的。
+     */
     private boolean enableConsumeQueueExt = false;
     // ConsumeQueue extend file size, 48M
     private int mappedFileSizeConsumeQueueExt = 48 * 1024 * 1024;
@@ -44,11 +61,19 @@ public class MessageStoreConfig {
 
     // CommitLog flush interval
     // flush data to disk
+    /**
+     * 刷写 CommitLog 的间隔时间，RocketMQ 后台会启动一个线程，将消息刷写到磁盘，
+     * 这个也就是该线程每次运行后等待的时间，默认为500毫秒。flush 操作，调用文件通道的force()方法。
+     */
     @ImportantField
     private int flushIntervalCommitLog = 500;
 
     // Only used if TransientStorePool enabled
     // flush data to FileChannel
+    /**
+     * 提交消息到 CommitLog 对应的文件通道的间隔时间，原理与上面类似；
+     * 将消息写入到文件通道（调用FileChannel.write方法）得到最新的写指针，默认为200毫秒。
+     */
     @ImportantField
     private int commitIntervalCommitLog = 200;
 

@@ -56,6 +56,7 @@ public class BrokerFastFailure {
     }
 
     public void start() {
+        // k3 每10ms cleanExpiredRequest
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
@@ -67,6 +68,7 @@ public class BrokerFastFailure {
     }
 
     private void cleanExpiredRequest() {
+        // k2 putMessage加锁的时间 > 1000ms，意味着 broker busy，发起生产消息流控，全部发送消息请求直接返回，
         while (this.brokerController.getMessageStore().isOSPageCacheBusy()) {
             try {
                 if (!this.brokerController.getSendThreadPoolQueue().isEmpty()) {
@@ -83,16 +85,16 @@ public class BrokerFastFailure {
             } catch (Throwable ignored) {
             }
         }
-
+        // k3 清理超时发送消息请求 200ms
         cleanExpiredRequestInQueue(this.brokerController.getSendThreadPoolQueue(),
             this.brokerController.getBrokerConfig().getWaitTimeMillsInSendQueue());
-
+        // k3 清理超时拉取请求 5s
         cleanExpiredRequestInQueue(this.brokerController.getPullThreadPoolQueue(),
             this.brokerController.getBrokerConfig().getWaitTimeMillsInPullQueue());
-
+        // k3 清理超时心跳 31s
         cleanExpiredRequestInQueue(this.brokerController.getHeartbeatThreadPoolQueue(),
             this.brokerController.getBrokerConfig().getWaitTimeMillsInHeartbeatQueue());
-
+        // k3 清理超时事务消息请求 3s
         cleanExpiredRequestInQueue(this.brokerController.getEndTransactionThreadPoolQueue(), this
             .brokerController.getBrokerConfig().getWaitTimeMillsInTransactionQueue());
     }
@@ -110,6 +112,7 @@ public class BrokerFastFailure {
                         break;
                     }
 
+                    // k3 rt.getCreateTimestamp() 进队列的时间
                     final long behind = System.currentTimeMillis() - rt.getCreateTimestamp();
                     if (behind >= maxWaitTimeMillsInQueue) {
                         if (blockingQueue.remove(runnable)) {

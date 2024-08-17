@@ -16,6 +16,10 @@
  */
 package org.apache.rocketmq.common.constant;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public class PermName {
     public static final int PERM_PRIORITY = 0x1 << 3;
     public static final int PERM_READ = 0x1 << 2;
@@ -49,5 +53,18 @@ public class PermName {
 
     public static boolean isInherited(final int perm) {
         return (perm & PERM_INHERIT) == PERM_INHERIT;
+    }
+
+    public static void main(String[] args) {
+        List<String> a = new ArrayList<>();
+        a.add("10.110.151.248@cr");
+        a.add("10.110.135.235@crm");
+        a.add("10.110.151.205@crm");
+
+        Collections.sort(a);
+        System.out.println(a);
+        int i = 3;
+        System.out.println("可读 "+ isReadable(i));
+        System.out.println("可写 "+ isWriteable(i));
     }
 }

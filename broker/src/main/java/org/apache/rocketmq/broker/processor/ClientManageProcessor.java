@@ -93,6 +93,8 @@ public class ClientManageProcessor implements NettyRequestProcessor {
                     topicSysFlag = TopicSysFlag.buildSysFlag(false, true);
                 }
                 String newTopic = MixAll.getRetryTopic(data.getGroupName());
+
+                // k3 consumer client在启动时会主动发第一次心跳. broker就会创建重试队列
                 this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
                     newTopic,
                     subscriptionGroupConfig.getRetryQueueNums(),

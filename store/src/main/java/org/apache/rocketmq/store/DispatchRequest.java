@@ -18,9 +18,13 @@ package org.apache.rocketmq.store;
 
 import java.util.Map;
 
+/**
+ * k1 转发到ConsumeQueue的Request
+ */
 public class DispatchRequest {
     private final String topic;
     private final int queueId;
+    // k2 消息物理偏移量
     private final long commitLogOffset;
     private final int msgSize;
     private final long tagsCode;
